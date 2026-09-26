@@ -1,0 +1,646 @@
+{
+  "address": "GkCqpfzoMVSCMw4muiKAXoo4kcHFRiYjjAHBQjmhMwmU",
+  "metadata": {
+    "name": "solana_agent_receipts",
+    "version": "0.1.0",
+    "spec": "0.1.0",
+    "description": "Hash-chained, tamper-evident decision receipts for autonomous agents on Solana"
+  },
+  "docs": [
+    "Agent Receipts: tamper-evident, hash-chained decision receipts for",
+    "autonomous agents.",
+    "",
+    "Every decision an agent makes (trade or hold) is hashed off chain and",
+    "attested here by the agent's own key. The program keeps one small account",
+    "per agent whose `head` commits to the whole ordered history, and it checks",
+    "the transaction itself so a BUY/SELL receipt cannot exist without its swap",
+    "and a HOLD cannot hide one."
+  ],
+  "instructions": [
+    {
+      "name": "attest",
+      "discriminator": [
+        83,
+        148,
+        120,
+        119,
+        144,
+        139,
+        117,
+        160
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "agent_log"
+          ]
+        },
+        {
+          "name": "agent_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "instructions",
+          "docs": [
+            "receipt's action matches what the same transaction actually did."
+          ],
+          "address": "Sysvar1nstructions1111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "receipt_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "expected_seq",
+          "type": "u64"
+        },
+        {
+          "name": "action",
+          "type": "u8"
+        }
+      ]
+    },
+    {
+      "name": "register_agent",
+      "discriminator": [
+        135,
+        157,
+        66,
+        195,
+        2,
+        113,
+        175,
+        30
+      ],
+      "accounts": [
+        {
+          "name": "payer",
+          "writable": true,
+          "signer": true
+        },
+        {
+          "name": "authority",
+          "docs": [
+            "The agent's own wallet. Signs every future attest."
+          ],
+          "signer": true
+        },
+        {
+          "name": "agent_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "system_program",
+          "address": "11111111111111111111111111111111"
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "name",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        },
+        {
+          "name": "venue",
+          "type": "pubkey"
+        },
+        {
+          "name": "policy_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "update_policy",
+      "discriminator": [
+        212,
+        245,
+        246,
+        7,
+        163,
+        151,
+        18,
+        57
+      ],
+      "accounts": [
+        {
+          "name": "authority",
+          "signer": true,
+          "relations": [
+            "agent_log"
+          ]
+        },
+        {
+          "name": "agent_log",
+          "writable": true,
+          "pda": {
+            "seeds": [
+              {
+                "kind": "const",
+                "value": [
+                  97,
+                  103,
+                  101,
+                  110,
+                  116
+                ]
+              },
+              {
+                "kind": "account",
+                "path": "authority"
+              }
+            ]
+          }
+        },
+        {
+          "name": "event_authority"
+        },
+        {
+          "name": "program"
+        }
+      ],
+      "args": [
+        {
+          "name": "policy_hash",
+          "type": {
+            "array": [
+              "u8",
+              32
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "AgentLog",
+      "discriminator": [
+        161,
+        91,
+        8,
+        128,
+        120,
+        212,
+        200,
+        138
+      ]
+    }
+  ],
+  "events": [
+    {
+      "name": "AgentRegistered",
+      "discriminator": [
+        191,
+        78,
+        217,
+        54,
+        232,
+        100,
+        189,
+        85
+      ]
+    },
+    {
+      "name": "PolicyUpdated",
+      "discriminator": [
+        225,
+        112,
+        112,
+        67,
+        95,
+        236,
+        245,
+        161
+      ]
+    },
+    {
+      "name": "ReceiptAttested",
+      "discriminator": [
+        167,
+        6,
+        141,
+        58,
+        14,
+        212,
+        77,
+        160
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Only the agent's own authority can write to its log"
+    },
+    {
+      "code": 6001,
+      "name": "SequenceMismatch",
+      "msg": "expected_seq does not match the log's next sequence number"
+    },
+    {
+      "code": 6002,
+      "name": "InvalidAction",
+      "msg": "Unknown action code"
+    },
+    {
+      "code": 6003,
+      "name": "TradeMissing",
+      "msg": "A BUY or SELL receipt needs a swap on the agent's venue earlier in the same transaction"
+    },
+    {
+      "code": 6004,
+      "name": "HoldWithTrade",
+      "msg": "A HOLD receipt cannot share a transaction with a swap on the agent's venue"
+    },
+    {
+      "code": 6005,
+      "name": "VenueSignerMismatch",
+      "msg": "The venue instruction must be signed by the agent's authority"
+    },
+    {
+      "code": 6006,
+      "name": "EmptyReceipt",
+      "msg": "Receipt hash must not be all zeroes"
+    }
+  ],
+  "types": [
+    {
+      "name": "AgentLog",
+      "docs": [
+        "One per agent. Holds O(1) state no matter how many receipts the agent writes:",
+        "the full history is committed by `head`, and each receipt's bytes live in the",
+        "agent's off-chain ledger and in the event of the transaction that attested it."
+      ],
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "authority",
+            "docs": [
+              "The only key allowed to attest. The agent's own wallet, never a shared operator."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "venue",
+            "docs": [
+              "Program the agent trades on. BUY/SELL receipts must sit in a transaction",
+              "that calls it; HOLD receipts must not."
+            ],
+            "type": "pubkey"
+          },
+          {
+            "name": "name",
+            "docs": [
+              "Human-readable name, zero padded."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "policy_hash",
+            "docs": [
+              "sha256 of the agent's published strategy/config. Changing it is itself",
+              "folded into `head`, so a silent strategy swap is visible."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "policy_version",
+            "type": "u32"
+          },
+          {
+            "name": "count",
+            "docs": [
+              "Number of receipts attested. The next receipt must claim this as its seq."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "last_receipt",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "head",
+            "docs": [
+              "Rolling commitment over every receipt and policy change, in order.",
+              "Recompute it from the ledger; if it matches, nothing was dropped,",
+              "reordered, edited or inserted."
+            ],
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "created_at",
+            "type": "i64"
+          },
+          {
+            "name": "last_at",
+            "type": "i64"
+          },
+          {
+            "name": "last_slot",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "AgentRegistered",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent_log",
+            "type": "pubkey"
+          },
+          {
+            "name": "authority",
+            "type": "pubkey"
+          },
+          {
+            "name": "venue",
+            "type": "pubkey"
+          },
+          {
+            "name": "name",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "policy_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "head",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          },
+          {
+            "name": "unix_ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "PolicyUpdated",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent_log",
+            "type": "pubkey"
+          },
+          {
+            "name": "policy_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "policy_version",
+            "type": "u32"
+          },
+          {
+            "name": "at_seq",
+            "docs": [
+              "Receipts attested before this change. Every receipt with seq >= this",
+              "ran under the new policy."
+            ],
+            "type": "u64"
+          },
+          {
+            "name": "head",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          },
+          {
+            "name": "unix_ts",
+            "type": "i64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ReceiptAttested",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "agent_log",
+            "type": "pubkey"
+          },
+          {
+            "name": "seq",
+            "type": "u64"
+          },
+          {
+            "name": "action",
+            "type": "u8"
+          },
+          {
+            "name": "receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "prev_receipt_hash",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "head",
+            "type": {
+              "array": [
+                "u8",
+                32
+              ]
+            }
+          },
+          {
+            "name": "policy_version",
+            "type": "u32"
+          },
+          {
+            "name": "slot",
+            "type": "u64"
+          },
+          {
+            "name": "unix_ts",
+            "type": "i64"
+          }
+        ]
+      }
+    }
+  ],
+  "constants": [
+    {
+      "name": "ACTION_BUY",
+      "type": "u8",
+      "value": "1"
+    },
+    {
+      "name": "ACTION_HOLD",
+      "docs": [
+        "Receipt actions. HOLD must not trade; BUY and SELL must trade."
+      ],
+      "type": "u8",
+      "value": "0"
+    },
+    {
+      "name": "ACTION_SELL",
+      "type": "u8",
+      "value": "2"
+    },
+    {
+      "name": "AGENT_SEED",
+      "docs": [
+        "PDA seed for an agent's log: [\"agent\", authority]."
+      ],
+      "type": "bytes",
+      "value": "[97, 103, 101, 110, 116]"
+    },
+    {
+      "name": "HEAD_DOMAIN_POLICY",
+      "type": "bytes",
+      "value": "[65, 71, 69, 78, 84, 45, 82, 69, 67, 69, 73, 80, 84, 83, 47, 118, 49, 47, 112, 111, 108, 105, 99, 121]"
+    },
+    {
+      "name": "HEAD_DOMAIN_RECEIPT",
+      "docs": [
+        "Domain tag mixed into every chain-head step so a head from this program can",
+        "never collide with a hash computed for some other purpose. Bump the digit if",
+        "the head formula ever changes; verifiers key off it."
+      ],
+      "type": "bytes",
+      "value": "[65, 71, 69, 78, 84, 45, 82, 69, 67, 69, 73, 80, 84, 83, 47, 118, 49, 47, 114, 101, 99, 101, 105, 112, 116]"
+    }
+  ]
+}
