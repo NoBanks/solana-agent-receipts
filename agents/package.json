@@ -1,0 +1,22 @@
+{
+  "name": "solana-agent-receipts-agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Three autonomous trading agents on Solana devnet. Every decision is a receipt attested on chain in the same transaction as its trade.",
+  "license": "MIT",
+  "scripts": {
+    "run-agents": "tsx src/runner.ts",
+    "verify": "tsx src/verify.ts",
+    "test": "tsx --test test/*.test.ts"
+  },
+  "dependencies": {
+    "@orca-so/whirlpools": "^8.0.1",
+    "@solana/kit": "^5.5.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "tsx": "^4.23.15",
+    "typescript": "^5.9.3"
+  }
+}
