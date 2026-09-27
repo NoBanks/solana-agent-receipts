@@ -13,7 +13,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createSolanaRpc, type Address } from "@solana/kit";
-import { AGENTS, CLUSTER, POOL, PROGRAM_ID, PYTH_SOL_USD, RPC_URL, explorerAddress, explorerTx } from "./config.js";
+import { AGENTS, CLUSTER, LEDGER_DIR, POOL, PROGRAM_ID, PYTH_SOL_USD, RPC_URL, explorerAddress, explorerTx } from "./config.js";
 import { fetchAgentLog, agentLogAddress } from "./program.js";
 import { ledgerPath, readRows } from "./ledger.js";
 import { receiptHash, type Json } from "./canonical.js";
@@ -22,6 +22,19 @@ const PORT = Number(process.env.PORT ?? 17370);
 const ADDRESSES: Record<string, string> = JSON.parse(process.env.AGENT_ADDRESSES ?? "{}");
 const rpc = createSolanaRpc(RPC_URL);
 const PAGE = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "page.html"), "utf8");
+const TERMINAL_DIR = join(LEDGER_DIR, "terminal");
+
+const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]!);
+function viewPage(title: string, body: string): string {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(title)}</title><style>
+:root{--bg:#0d0f14;--panel:#151922;--line:#252b38;--text:#e7eaf0;--muted:#8b93a7;--ok:#14f195;--bad:#ff5c5c;--accent:#14f195}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 ui-sans-serif,system-ui,sans-serif}
+main{max-width:1100px;margin:0 auto;padding:28px 16px}h1{font-size:24px;margin:0 0 12px}a{color:var(--accent)}
+pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;overflow-x:auto;font:13px/1.5 ui-monospace,Menlo,monospace}
+pre.term{background:#07090d;color:#d6f5e3;font-size:14px}.ok{color:var(--ok)}.bad{color:var(--bad)}p{overflow-wrap:anywhere}
+</style></head><body><main><h1>${esc(title)}</h1>${body}<p><a href="/">back to the live page</a></p></main></body></html>`;
+}
 
 async function status() {
   const agents: unknown[] = [];
@@ -80,6 +93,25 @@ createServer(async (req, res) => {
     if (url.pathname === "/api/status") {
       res.writeHead(200, { "content-type": "application/json", "cache-control": "no-store" });
       return res.end(JSON.stringify(await status(), null, 2));
+    }
+    // /receipt/<agent>/<seq>: one receipt, pretty-printed, with its hash re-computed right here.
+    const rm = url.pathname.match(/^\/receipt\/(passive|aggressive|rebalance)\/(\d+)$/);
+    if (rm) {
+      const row = readRows(ledgerPath(rm[1])).find((r) => r.seq === rm[2]);
+      if (!row) return res.writeHead(404).end("no such receipt");
+      const again = receiptHash(row.receipt as Json);
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      return res.end(viewPage(`${rm[1].toUpperCase()} receipt #${row.seq}`,
+        `<p>receipt_hash <b>${esc(row.receipt_hash)}</b><br>re-hashed now: <b class="${again === row.receipt_hash ? "ok" : "bad"}">${esc(again)}</b></p>` +
+        `<p><a href="${explorerTx(row.signature)}">transaction on the explorer</a></p><pre>${esc(JSON.stringify(row.receipt, null, 2))}</pre>`));
+    }
+    // /terminal/<name>: real command output saved by scripts/capture_terminal.sh, shown with the time it ran.
+    const tm = url.pathname.match(/^\/terminal\/([a-z0-9_-]+)$/);
+    if (tm) {
+      const p = join(TERMINAL_DIR, `${tm[1]}.txt`);
+      if (!existsSync(p)) return res.writeHead(404).end("no such capture");
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      return res.end(viewPage(tm[1], `<pre class="term">${esc(readFileSync(p, "utf8"))}</pre>`));
     }
     const m = url.pathname.match(/^\/ledger\/(passive|aggressive|rebalance)\.jsonl$/);
     if (m) {

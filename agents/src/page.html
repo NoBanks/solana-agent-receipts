@@ -76,7 +76,7 @@ async function load() {
         <dt>ledger</dt><dd><a href="/ledger/${a.name.toLowerCase()}.jsonl">${a.name.toLowerCase()}.jsonl</a></dd>
       </dl>
       ${a.recent.map((x) => `<div class="row"><span class="act ${x.action}">#${esc(x.seq)} ${x.action}</span>
-        <a href="${x.tx}" class="mono">${esc(x.receipt_hash.slice(0, 16))}</a>
+        <a href="/receipt/${a.name.toLowerCase()}/${x.seq}" class="mono">${esc(x.receipt_hash.slice(0, 16))}</a> <a href="${x.tx}">tx</a>
         <div class="reason">${esc(x.reason)}${x.swap_in ? " | in: " + esc(x.swap_in) : ""}</div></div>`).join("")}
     </div>`;
   }).join("");
