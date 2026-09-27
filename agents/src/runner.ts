@@ -43,6 +43,13 @@ import { decide, policyDocument, type Inventory } from "./strategy.js";
 import { appendRow, ledgerPath, readRows, type LedgerRow } from "./ledger.js";
 import { loadSigner } from "./wallets.js";
 
+// The RPC URL carries an API key. Errors from @solana/kit can echo the URL, and PM2 logs are
+// on a livestreamed machine, so every console line is redacted before it is written.
+for (const k of ["log", "error"] as const) {
+  const orig = console[k].bind(console);
+  console[k] = (...a: unknown[]) => orig(...a.map((x) => String(x).replace(/api-key=[^&\s"']+/gi, "api-key=<hidden>")));
+}
+
 const RECEIPT_TYPE = "solana_agent_decision";
 const ENGINE = "solana-agent-receipts";
 const ENGINE_VERSION = "0.1.0";

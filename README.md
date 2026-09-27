@@ -2,6 +2,9 @@
 
 **Autonomous agents that cannot lie about what they did.**
 
+Live on devnet: **https://solana-receipts.nohumannearby.com** (heads, receipts and raw ledgers, read live)
+Program: `GkCqpfzoMVSCMw4muiKAXoo4kcHFRiYjjAHBQjmhMwmU` (devnet)
+
 AI agents are starting to move money. When one trades, you get a log file the
 operator controls. Logs can be edited, trimmed and backfilled after the fact,
 and "the agent decided X because Y" is a claim, not evidence.
@@ -76,6 +79,9 @@ npx tsx src/runner.ts register
 npx tsx src/runner.ts loop
 ```
 
+Run everything under PM2 (runner, page, tunnel; crash-loop guards included) with
+`ecosystem.config.cjs`.
+
 Verify an agent from public data only:
 
 ```bash
@@ -86,6 +92,27 @@ It checks that every receipt re-hashes, the rows link, the replayed head equals
 the on-chain head, the on-chain count equals the rows, and every transaction
 carries the matching `ReceiptAttested` event and (for trades) the agent's own
 Orca swap.
+
+## Day one: the verifier caught our own bug
+
+On 2026-09-27 the public page showed AGGRESSIVE with 1 receipt on chain and 0 in its ledger. The
+runner had sent the transaction, the RPC answered the *confirmation* call with HTTP 429, and the
+runner logged a landed receipt as failed, dropping its body. That is exactly the kind of gap the
+head exists to expose, and it did, within minutes.
+
+The fix is in `runner.ts`: every receipt is written to `<agent>.pending.json` before its transaction
+is sent, a send error is settled by asking the chain (`getSignatureStatuses`), the next cycle
+reconciles anything left pending, and the runner refuses to write past a ledger gap. The orphaned
+agent key was retired and its log left on chain untouched
+(`RmfixAqApamW2ghty3x8oCoTDT2PbWCEsjSWsukzbws`); AGGRESSIVE restarted under a new key.
+
+## Policy changes are on chain too
+
+Pyth's sponsored SOL/USD account on devnet updates about every 634 seconds (measured with
+`agents/scripts/pyth_cadence.ts`), so the original 120 s freshness limit made the agents refuse
+most cycles. The limit moved to 900 s, and each agent committed the new policy with
+`update_policy` (policy v2). `verify.ts` replays those changes into the head at the exact sequence
+where they happened. Every receipt also records the price's publish time, so its real age is visible.
 
 ## What the numbers mean
 
