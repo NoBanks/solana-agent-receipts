@@ -48,7 +48,10 @@ export const MAX_SOL_IN = 50_000_000n; // 0.05 SOL
 export const MIN_USDC_IN = 100_000n; // 0.10 devUSDC
 export const MAX_USDC_IN = 1_000_000n; // 1.00 devUSDC
 /** Refuse to act on a Pyth price older than this or with a wide confidence band. */
-export const PYTH_MAX_AGE_SECONDS = Number(process.env.PYTH_MAX_AGE_SECONDS ?? 120);
+// Measured 2026-09-27 (scripts/pyth_cadence.ts, 36 samples): Pyth's sponsored SOL/USD account on
+// devnet updates about every 634 s; median age 463 s, max 635 s. 120 s made the agents refuse ~90%
+// of cycles. 900 s covers one devnet update gap with margin; every receipt records the real age.
+export const PYTH_MAX_AGE_SECONDS = Number(process.env.PYTH_MAX_AGE_SECONDS ?? 900);
 export const PYTH_MAX_CONF_BPS = 100;
 
 export function explorerTx(sig: string): string {

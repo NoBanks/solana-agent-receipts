@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Receipts</title>
+<style>
+  :root {
+    --bg: #0d0f14; --panel: #151922; --line: #252b38; --text: #e7eaf0; --muted: #8b93a7;
+    --accent: #14f195; --accent2: #9945ff; --hold: #8b93a7; --buy: #14f195; --sell: #ff6b8b; --bad: #ff5c5c;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --bg: #f6f7fb; --panel: #ffffff; --line: #e1e4ec; --text: #141821; --muted: #5d6578;
+      --accent: #0a9f63; --accent2: #7a2fe0; --hold: #5d6578; --buy: #0a9f63; --sell: #d0345a; --bad: #c62828;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 28px 16px 60px; }
+  h1 { font-size: 30px; margin: 0 0 6px; letter-spacing: -0.02em; }
+  h1 span { background: linear-gradient(90deg, var(--accent2), var(--accent)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { color: var(--muted); max-width: 760px; margin: 0 0 18px; }
+  .links { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 13px; margin-bottom: 22px; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; min-width: 0; }
+  .card h2 { margin: 0 0 4px; font-size: 18px; display: flex; justify-content: space-between; align-items: center; }
+  .badge { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; }
+  .ok { color: var(--accent); } .bad { color: var(--bad); }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 13px; margin: 8px 0 12px; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; overflow-wrap: anywhere; }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }
+  .row { border-top: 1px solid var(--line); padding: 8px 0; font-size: 13px; }
+  .act { font-weight: 700; font-size: 12px; margin-right: 6px; }
+  .HOLD { color: var(--hold); } .BUY { color: var(--buy); } .SELL { color: var(--sell); }
+  .reason { color: var(--muted); }
+  section.verify { margin-top: 26px; }
+  pre { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px; overflow-x: auto; font-size: 12.5px; white-space: pre; }
+  footer { margin-top: 26px; color: var(--muted); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1><span>Agent Receipts</span> on Solana</h1>
+  <p class="lede">Three autonomous agents read SOL/USD from Pyth on chain and trade on Orca. Every decision, trade or hold, is a receipt checked by a Solana program inside the same transaction that executed it. Each agent's whole history is committed by one 32-byte head on chain. Everything below is read live.</p>
+  <div class="links" id="links"></div>
+  <div class="grid" id="agents"><div class="card">Loading live data...</div></div>
+  <section class="verify">
+    <h2>Check it yourself</h2>
+    <p class="lede">No keys, no trust in this page. The verifier re-hashes every receipt, replays the head against the chain, and checks every transaction's event and swap.</p>
+    <pre id="cmd">git clone https://github.com/NoBanks/solana-agent-receipts
+cd solana-agent-receipts/agents && npm install</pre>
+  </section>
+  <footer id="foot"></footer>
+</main>
+<script>
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+async function load() {
+  const r = await fetch("/api/status", { cache: "no-store" });
+  const d = await r.json();
+  document.getElementById("links").innerHTML =
+    `<a href="${d.program_url}">program ${esc(d.program.slice(0, 8))}...</a>` +
+    `<a href="${d.pyth_url}">Pyth SOL/USD account</a><a href="${d.pool_url}">Orca pool</a>` +
+    `<span>cluster: ${esc(d.cluster)}</span>`;
+  document.getElementById("agents").innerHTML = d.agents.map((a) => {
+    const good = a.counts_match && a.rows_rehash;
+    return `<div class="card">
+      <h2>${esc(a.name)} <span class="badge ${good ? "ok" : "bad"}">${good ? "head + count match" : "check failed"}</span></h2>
+      <dl class="kv">
+        <dt>receipts on chain</dt><dd>${esc(a.onchain_count)} (ledger ${a.ledger_rows}, ${a.trades} trades)</dd>
+        <dt>head</dt><dd class="mono">${esc(a.onchain_head)}</dd>
+        <dt>agent log</dt><dd><a class="mono" href="${a.agent_log_url}">${esc(a.agent_log)}</a></dd>
+        <dt>last receipt</dt><dd>${esc(a.last_at)}</dd>
+        <dt>ledger</dt><dd><a href="/ledger/${a.name.toLowerCase()}.jsonl">${a.name.toLowerCase()}.jsonl</a></dd>
+      </dl>
+      ${a.recent.map((x) => `<div class="row"><span class="act ${x.action}">#${esc(x.seq)} ${x.action}</span>
+        <a href="${x.tx}" class="mono">${esc(x.receipt_hash.slice(0, 16))}</a>
+        <div class="reason">${esc(x.reason)}${x.swap_in ? " | in: " + esc(x.swap_in) : ""}</div></div>`).join("")}
+    </div>`;
+  }).join("");
+  const origin = location.origin;
+  document.getElementById("cmd").textContent =
+    "git clone https://github.com/NoBanks/solana-agent-receipts\ncd solana-agent-receipts/agents && npm install\n" +
+    d.agents.map((a) => `npx tsx src/verify.ts ${a.authority} ${origin}/ledger/${a.name.toLowerCase()}.jsonl --tx all`).join("\n");
+  document.getElementById("foot").textContent = `Read at ${d.read_at}. Signal = real SOL/USD from Pyth. Execution = Orca devnet pool, priced by devnet liquidity. Devnet evidence of the mechanism, not a trading performance claim.`;
+}
+load().catch((e) => { document.getElementById("agents").innerHTML = `<div class="card bad">Could not load: ${esc(e)}</div>`; });
+setInterval(() => load().catch(() => {}), 30000);
+</script>
+</body>
+</html>

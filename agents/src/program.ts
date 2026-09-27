@@ -112,6 +112,19 @@ export async function attestIx(authority: KeyPairSigner, receiptHashHex: string,
   } as Instruction;
 }
 
+export async function updatePolicyIx(authority: KeyPairSigner, policyHash: Buffer): Promise<Instruction> {
+  return {
+    programAddress: PROGRAM_ID,
+    accounts: [
+      { address: authority.address, role: AccountRole.READONLY_SIGNER, signer: authority },
+      { address: await agentLogAddress(authority.address), role: AccountRole.WRITABLE },
+      { address: await eventAuthority(), role: AccountRole.READONLY },
+      { address: PROGRAM_ID, role: AccountRole.READONLY },
+    ],
+    data: Buffer.concat([disc("instructions", "update_policy"), policyHash]),
+  } as Instruction;
+}
+
 export type AgentLog = {
   address: string;
   authority: string;

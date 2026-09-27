@@ -12,7 +12,7 @@
  * matches the receipt's action, so a trade and its receipt land together or
  * not at all.
  */
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   address,
@@ -26,6 +26,7 @@ import {
   setTransactionMessageFeePayerSigner,
   setTransactionMessageLifetimeUsingBlockhash,
   signTransactionMessageWithSigners,
+  signature as toSig,
   type Instruction,
   type KeyPairSigner,
 } from "@solana/kit";
@@ -37,9 +38,9 @@ import {
 } from "./config.js";
 import { canonicalBytes, receiptHash, sha256Hex, type Json } from "./canonical.js";
 import { confBps, deviationBps, readPyth } from "./pyth.js";
-import { attestIx, fetchAgentLog, registerAgentIx } from "./program.js";
+import { attestIx, fetchAgentLog, registerAgentIx, updatePolicyIx, type AgentLog } from "./program.js";
 import { decide, policyDocument, type Inventory } from "./strategy.js";
-import { appendRow } from "./ledger.js";
+import { appendRow, ledgerPath, readRows, type LedgerRow } from "./ledger.js";
 import { loadSigner } from "./wallets.js";
 
 const RECEIPT_TYPE = "solana_agent_decision";
@@ -56,7 +57,7 @@ export function policyHashFor(agent: AgentName): Buffer {
   return Buffer.from(sha256Hex(canonicalBytes({ agent, ...policyDocument() } as Json)), "hex");
 }
 
-async function send(feePayer: KeyPairSigner, ixs: Instruction[]): Promise<string> {
+async function signTx(feePayer: KeyPairSigner, ixs: Instruction[]) {
   const { value: latest } = await rpc.getLatestBlockhash({ commitment: "confirmed" }).send();
   const msg = pipe(
     createTransactionMessage({ version: 0 }),
@@ -65,8 +66,64 @@ async function send(feePayer: KeyPairSigner, ixs: Instruction[]): Promise<string
     (m) => appendTransactionMessageInstructions(ixs, m),
   );
   const tx = await signTransactionMessageWithSigners(msg);
+  return { tx, sig: String(getSignatureFromTransaction(tx)) };
+}
+
+async function send(feePayer: KeyPairSigner, ixs: Instruction[]): Promise<string> {
+  const { tx, sig } = await signTx(feePayer, ixs);
   await sendAndConfirm(tx as Parameters<typeof sendAndConfirm>[0], { commitment: "confirmed" });
-  return getSignatureFromTransaction(tx);
+  return sig;
+}
+
+/** What the chain says about a signature: "ok", "failed", or "unknown" (not seen). */
+async function chainOutcome(sig: string): Promise<"ok" | "failed" | "unknown"> {
+  for (let i = 0; i < 12; i++) {
+    try {
+      const { value } = await rpc.getSignatureStatuses([toSig(sig)], { searchTransactionHistory: true }).send();
+      const st = value[0];
+      if (st && (st.confirmationStatus === "confirmed" || st.confirmationStatus === "finalized")) return st.err ? "failed" : "ok";
+    } catch {
+      // rate limited or flaky RPC: keep asking, never guess
+    }
+    await new Promise((r) => setTimeout(r, 5000));
+  }
+  return "unknown";
+}
+
+// ---- write-ahead: a receipt is saved to <agent>.pending.json BEFORE its transaction is sent.
+// 2026-09-27: a 429 on the CONFIRM call made the runner log a landed receipt as failed and drop
+// its body, leaving AGGRESSIVE's on-chain count one ahead of its ledger forever. The chain is
+// the source of truth; the runner now asks it before deciding, and recovers on the next cycle.
+function pendingPath(agent: string): string {
+  return join(LEDGER_DIR, `${agent.toLowerCase()}.pending.json`);
+}
+
+function recordFailure(agent: string, row: LedgerRow, why: string): void {
+  mkdirSync(LEDGER_DIR, { recursive: true });
+  appendFileSync(
+    join(LEDGER_DIR, "failed_attempts.jsonl"),
+    JSON.stringify({ at: new Date().toISOString(), agent, seq: row.seq, action: row.action, receipt_hash: row.receipt_hash, signature: row.signature, error: why.slice(0, 500) }) + "\n",
+  );
+}
+
+/** Settle a pending receipt from an earlier cycle against the chain. */
+async function reconcile(agent: AgentName, log: AgentLog): Promise<void> {
+  const p = pendingPath(agent);
+  if (!existsSync(p)) return;
+  const row = JSON.parse(readFileSync(p, "utf8")) as LedgerRow;
+  const seq = BigInt(row.seq);
+  if (log.count > seq) {
+    const outcome = await chainOutcome(row.signature);
+    if (outcome === "ok") {
+      appendRow(agent, row);
+      console.log(`${agent} #${row.seq} recovered from pending: landed on chain, now in the ledger`);
+    } else {
+      throw new Error(`${agent}: chain count ${log.count} passed pending seq ${row.seq} but its tx is ${outcome}; stopping for a human`);
+    }
+  } else {
+    recordFailure(agent, row, "pending receipt never landed (chain count did not advance)");
+  }
+  unlinkSync(p);
 }
 
 async function inventory(owner: KeyPairSigner): Promise<Inventory> {
@@ -98,10 +155,35 @@ async function register(): Promise<void> {
   }
 }
 
+/** Commit the current strategy parameters on chain for any agent whose policy_hash is out of date. */
+async function syncPolicy(): Promise<void> {
+  for (const agent of AGENTS) {
+    const signer = await loadSigner(agent);
+    const log = await fetchAgentLog(rpc, signer.address);
+    if (!log) throw new Error(`${agent} is not registered`);
+    const want = policyHashFor(agent).toString("hex");
+    if (log.policyHash === want) {
+      console.log(`${agent} policy v${log.policyVersion} is current`);
+      continue;
+    }
+    const sig = await send(signer, [await updatePolicyIx(signer, Buffer.from(want, "hex"))]);
+    console.log(`${agent} policy v${log.policyVersion} -> v${log.policyVersion + 1}: ${explorerTx(sig)}`);
+  }
+}
+
 async function cycle(agent: AgentName, n: number): Promise<void> {
   const signer = await loadSigner(agent);
-  const log = await fetchAgentLog(rpc, signer.address);
+  let log = await fetchAgentLog(rpc, signer.address);
   if (!log) throw new Error(`${agent} is not registered; run: npx tsx src/runner.ts register`);
+  if (existsSync(pendingPath(agent))) {
+    await reconcile(agent, log);
+    log = (await fetchAgentLog(rpc, signer.address))!;
+  }
+  // Never write past a gap: if the chain is ahead of the ledger, stop and say so.
+  const ledgerRows = readRows(ledgerPath(agent)).length;
+  if (BigInt(ledgerRows) !== log.count) {
+    throw new Error(`${agent}: ledger has ${ledgerRows} rows but chain count is ${log.count}; refusing to continue until reconciled`);
+  }
 
   const pyth = await readPyth(rpc, PYTH_SOL_USD);
   const pool = await fetchWhirlpool(rpc, POOL);
@@ -179,25 +261,38 @@ async function cycle(agent: AgentName, n: number): Promise<void> {
   const h = receiptHash(receipt);
   const ix = await attestIx(signer, h, seq, d.action);
 
+  const { tx, sig } = await signTx(signer, [...swapIxs, ix]);
+  const row: LedgerRow = {
+    seq: seq.toString(),
+    action: d.action,
+    receipt_hash: h,
+    prev_receipt_hash: log.lastReceipt,
+    signature: sig,
+    receipt,
+  };
+  mkdirSync(LEDGER_DIR, { recursive: true });
+  writeFileSync(pendingPath(agent), JSON.stringify(row));
+
+  let outcome: "ok" | "failed" | "unknown";
   try {
-    const sig = await send(signer, [...swapIxs, ix]);
-    appendRow(agent, {
-      seq: seq.toString(),
-      action: d.action,
-      receipt_hash: h,
-      prev_receipt_hash: log.lastReceipt,
-      signature: sig,
-      receipt,
-    });
-    console.log(`${agent} #${seq} ${d.action} ${h.slice(0, 12)} ${explorerTx(sig)} | ${d.reason}`);
+    await sendAndConfirm(tx as Parameters<typeof sendAndConfirm>[0], { commitment: "confirmed" });
+    outcome = "ok";
   } catch (e) {
-    // Nothing was attested, so nothing enters the ledger. Record why, outside the chain.
-    mkdirSync(LEDGER_DIR, { recursive: true });
-    appendFileSync(
-      join(LEDGER_DIR, "failed_attempts.jsonl"),
-      JSON.stringify({ at: new Date().toISOString(), agent, seq: seq.toString(), action: d.action, receipt_hash: h, error: String(e).slice(0, 500) }) + "\n",
-    );
-    console.error(`${agent} #${seq} ${d.action} FAILED, not attested: ${String(e).slice(0, 200)}`);
+    // A send/confirm error does NOT mean the transaction failed. Ask the chain.
+    outcome = await chainOutcome(sig);
+    if (outcome !== "ok") console.error(`${agent} #${seq} send error: ${String(e).slice(0, 200)}`);
+  }
+  if (outcome === "ok") {
+    appendRow(agent, row);
+    unlinkSync(pendingPath(agent));
+    console.log(`${agent} #${seq} ${d.action} ${h.slice(0, 12)} ${explorerTx(sig)} | ${d.reason}`);
+  } else if (outcome === "failed") {
+    recordFailure(agent, row, "transaction failed on chain; nothing attested");
+    unlinkSync(pendingPath(agent));
+    console.error(`${agent} #${seq} ${d.action} failed on chain, not attested`);
+  } else {
+    // Unknown: keep the pending file. Next cycle's reconcile() settles it from chain state.
+    console.error(`${agent} #${seq} outcome unknown, left pending for the next cycle`);
   }
 }
 
@@ -213,14 +308,16 @@ async function runOnce(n: number): Promise<void> {
 
 const cmd = process.argv[2] ?? "once";
 if (cmd === "register") await register();
+else if (cmd === "sync-policy") await syncPolicy();
 else if (cmd === "once") await runOnce(0);
 else if (cmd === "loop") {
+  await syncPolicy();
   for (let n = 0; ; n++) {
     await runOnce(n);
     await new Promise((r) => setTimeout(r, CYCLE_SECONDS * 1000));
   }
 } else {
-  console.error("usage: runner.ts register | once | loop");
+  console.error("usage: runner.ts register | sync-policy | once | loop");
   process.exit(2);
 }
 process.exit(0);
