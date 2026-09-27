@@ -26,6 +26,18 @@ import type { LedgerRow } from "./ledger.js";
 
 const rpc = createSolanaRpc(RPC_URL);
 
+/** Public RPCs rate-limit (HTTP 429). Back off and retry instead of failing a judge's run. */
+async function withRetry<T>(call: () => Promise<T>): Promise<T> {
+  for (let i = 0; ; i++) {
+    try {
+      return await call();
+    } catch (e) {
+      if (i >= 7 || !/429|Too Many|fetch failed|ECONNRESET/i.test(String(e))) throw e;
+      await new Promise((r) => setTimeout(r, 1000 * 2 ** i));
+    }
+  }
+}
+
 async function loadRows(src: string): Promise<LedgerRow[]> {
   const text = src.startsWith("http") ? await (await fetch(src)).text() : readFileSync(src, "utf8");
   return text.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
@@ -38,17 +50,19 @@ function eventDisc(name: string): Buffer {
 }
 
 /** Registration + every policy change, read from the agent log's own transaction history. */
-async function policyHistory(logAddr: Address): Promise<PolicyEvent[]> {
+async function policyHistory(logAddr: Address, receiptSigs: Set<string>): Promise<PolicyEvent[]> {
   const out: PolicyEvent[] = [];
   let before: string | undefined;
   const regDisc = eventDisc("AgentRegistered");
   const polDisc = eventDisc("PolicyUpdated");
   for (;;) {
-    const sigs = await rpc.getSignaturesForAddress(logAddr, { limit: 1000, ...(before ? { before: toSig(before) } : {}) }).send();
+    const sigs = await withRetry(() => rpc.getSignaturesForAddress(logAddr, { limit: 1000, ...(before ? { before: toSig(before) } : {}) }).send());
     if (sigs.length === 0) break;
     for (const s of sigs) {
-      if (s.err) continue;
-      const tx = await rpc.getTransaction(s.signature, { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" }).send();
+      // Receipt transactions carry only ReceiptAttested; registration and policy changes are the
+      // only other writes to the log, so fetch just those (a handful, not the whole history).
+      if (s.err || receiptSigs.has(String(s.signature))) continue;
+      const tx = await withRetry(() => rpc.getTransaction(s.signature, { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" }).send());
       for (const inner of tx?.meta?.innerInstructions ?? []) {
         for (const ix of inner.instructions) {
           const data = Buffer.from(base58ToBytes(ix.data as string));
@@ -80,7 +94,7 @@ function base58ToBytes(s: string): Uint8Array {
 }
 
 async function checkTx(row: LedgerRow, logAddr: string, venue: string, authority: string): Promise<string | null> {
-  const tx = await rpc.getTransaction(toSig(row.signature), { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" }).send();
+  const tx = await withRetry(() => rpc.getTransaction(toSig(row.signature), { encoding: "json", maxSupportedTransactionVersion: 0, commitment: "confirmed" }).send());
   if (!tx) return "transaction not found";
   if (tx.meta?.err) return `transaction failed: ${JSON.stringify(tx.meta.err)}`;
   const keys = [
@@ -114,9 +128,18 @@ async function main() {
     process.exit(2);
   }
   const authority = address(authorityArg);
-  const rows = await loadRows(src);
-  const log = await fetchAgentLog(rpc, authority);
+  // A live agent can land a receipt between the ledger download and the chain read. Read the
+  // chain first, then the ledger; if the ledger is still behind, re-read both (a few tries) so a
+  // snapshot race is never reported as tampering. Any real gap persists and is reported below.
+  let log = await withRetry(() => fetchAgentLog(rpc, authority));
   if (!log) throw new Error(`no AgentLog for ${authority}`);
+  let rows = await loadRows(src);
+  for (let i = 0; i < 3 && BigInt(rows.length) !== log.count; i++) {
+    await new Promise((r) => setTimeout(r, 4000));
+    log = (await withRetry(() => fetchAgentLog(rpc, authority)))!;
+    rows = await loadRows(src);
+  }
+  // Still mismatched after the retries = a real gap or extra rows; reported as a problem below.
   const logAddr = String(await agentLogAddress(authority));
   const problems: string[] = [];
 
@@ -131,7 +154,7 @@ async function main() {
   });
 
   // 3: replay the head
-  const policies = await policyHistory(logAddr as Address);
+  const policies = await policyHistory(logAddr as Address, new Set(rows.map((r) => r.signature)));
   if (!policies.length || policies[0].version !== 1) problems.push("registration event not found on chain");
   let head = ZERO32;
   let p = 0;
